@@ -74,29 +74,29 @@ def dump_to_file(x):
 #     return text
 
 
-def signal_handler(sig, frame):
-    # Get the current session state
-    session_state = st.session_state.get(source=None, data=None)
-
-    # Stop the data source if it exists
-    if session_state.source is not None:
-        os.write(sys.stdout.fileno(), b"\nSignal received to stop the app...\n")
-        session_state.source.stop()
-
-        time.sleep(1)
-
-        # Print summary if data exists
-        if session_state.data is not None:
-            if isinstance(session_state.data, pd.DataFrame):
-                print(session_state.data)
-            else:
-                print(type(session_state.data))
-
-        # Clear the session state
-        session_state.source = None
-        session_state.data = None
-
-    exit(0)
+# def signal_handler(sig, frame):
+#     # Get the current session state
+#     session_state = st.session_state.get(source=None, data=None)
+#
+#     # Stop the data source if it exists
+#     if session_state.source is not None:
+#         os.write(sys.stdout.fileno(), b"\nSignal received to stop the app...\n")
+#         session_state.source.stop()
+#
+#         time.sleep(1)
+#
+#         # Print summary if data exists
+#         if session_state.data is not None:
+#             if isinstance(session_state.data, pd.DataFrame):
+#                 print(session_state.data)
+#             else:
+#                 print(type(session_state.data))
+#
+#         # Clear the session state
+#         session_state.source = None
+#         session_state.data = None
+#
+#     exit(0)
 
 
 def process_limits_streaming(data: Union[dict, pd.DataFrame]):

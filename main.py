@@ -1,61 +1,175 @@
-import streamlit as st
-import pandas as pd
+from abc import ABC
+from typing import Union
+import sys
 import time
-import matplotlib.pyplot as plt
+import pandas as pd
+import json
+import os
+from typing import List
+import datetime as dt
+from paho.mqtt.client import MQTTMessage
+from river import anomaly
+from streamz import Stream
+import streamlit as st
+
+GRACE_PERIOD = 60 * 24
 
 
-def main() -> None:
-    st.title('Anomaly Detector')
-    st.write('''Anomaly Detector is an AI service with an API that allows you to track and detect anomalies in time 
-    series data.The main goal of anomaly detection is to discover unexpected events or rare occurrences in data.''')
-    left_column, right_column = st.columns(2)
-    with left_column:
-        uploaded_file = st.file_uploader('Upload your **CSV/JSON** file here:')
-    if uploaded_file is None:
-        st.session_state['upload_state'] = 'Upload a file first!'
+class MyOneClassSVM:
+    def __init__(self, grace_period=GRACE_PERIOD):
+        self.grace_period = grace_period
+        self.n_samples = 0
+        self.model = anomaly.QuantileFilter(
+            anomaly.OneClassSVM(nu=0.2),
+            q=0.995)
 
-    elif uploaded_file.name.endswith('.json'):
-        st.header('JSON file Processing')
-        df = pd.read_json(uploaded_file)
-        # general alternative way
-        df['_time'] = pd.to_datetime(df['_time'])
-        st.write(df.describe())
-        create_plot(df)
+    def learn(self, x):
+        self.n_samples += 1
+        return self.model.learn_one(x)
 
-    elif uploaded_file.name.endswith('.csv'):
-        st.header('CSV file Processing')
-        df = pd.read_csv(uploaded_file)
-        st.write(df.describe())
-        create_plot(df)
+    def score(self, x) -> float:
+        return self.model.score_one(x)
 
-    with right_column:
-        url = st.text_input('Upload MQTT url path here:')
+    def predict(self, x):
+        # if self.n_samples < self.grace_period:
+        #     return 0
+        score = self.score(x)
+        return self.model.classify(score)
 
-    if url is None:
-        st.info("Please fill in a URL")
-        st.stop()
+    def process(self, x):
+        is_anomaly = self.predict(x)
+        if not is_anomaly:
+            self.learn(x)
+        return is_anomaly
 
 
-def create_plot(file):
-    fig, ax = plt.subplots(1, 1)
-    ax.scatter(x=file.iloc[0], y=file.iloc[1])
-    ax.set_xlabel('Xlabel')
-    ax.set_ylabel('Ylabel')
-    st.pyplot(fig)
+def preprocess(x):
+    print('x-', x)
+
+    if isinstance(x, pd.Series):
+        return {
+            "time": x['_time'].tz_localize(None),
+            "data": x['_value']
+        }
+    elif isinstance(x, tuple) and isinstance(x[1], pd.Series):
+        return {
+            "time": x[1]['_time'].tz_localize(None),
+            "data": x[1]['_value']
+        }
+    elif isinstance(x, dict):
+        return list(x.values())[0]
+    elif isinstance(x, MQTTMessage):
+        return {"time": dt.datetime.fromtimestamp(x.timestamp).replace(microsecond=0),
+                "data": float(x.payload)
+                }
 
 
+def fit_transform(x, model):
+    timestamp = x["time"]
+    is_anomaly = model.process(x)
+    return {
+        "time": str(timestamp),
+        "anomaly": is_anomaly,
+    }
 
 
+def dump_to_file(x, f):
+    print(json.dumps(x), file=f)
 
 
+# def return_summary(df):
+#     text = (
+#         f"Proportion of anomalous samples: "
+#         f"{sum(df['anomaly']) / len(df['anomaly']) * 100:.02f}%\n"
+#         f"Total number of anomalous events: "
+#         f"{sum(pd.Series(df['anomaly']).diff().dropna() == 1)}")
+#     return text
 
 
-# def from_data_file(filename):
-#     url = (
-#             "http://raw.githubusercontent.com/streamlit/"
-#             "example-data/master/hello/v1/%s" % filename
-#     )
-#     return pd.read_json(url)
+def signal_handler(sig, frame):
+    # Get the current session state
+    session_state = st.session_state.get(source=None, data=None)
 
-if __name__ == "__main__":
-    main()
+    # Stop the data source if it exists
+    if session_state.source is not None:
+        os.write(sys.stdout.fileno(), b"\nSignal received to stop the app...\n")
+        session_state.source.stop()
+
+        time.sleep(1)
+
+        # Print summary if data exists
+        if session_state.data is not None:
+            if isinstance(session_state.data, pd.DataFrame):
+                print(session_state.data)
+            else:
+                print(type(session_state.data))
+
+        # Clear the session state
+        session_state.source = None
+        session_state.data = None
+
+    exit(0)
+
+
+def process_limits_streaming(data: Union[dict, pd.DataFrame]):
+    anomaly_detector = MyOneClassSVM()
+    st.sidebar.subheader("MQTT Settings")
+
+    if isinstance(data, dict):
+        source = Stream.from_mqtt(**data)
+    elif isinstance(data, pd.DataFrame):
+        source = Stream.from_iterable(data.iterrows())
+    else:
+        raise RuntimeError("Wrong data format.")
+
+    detector = source.map(preprocess).map(fit_transform, anomaly_detector)
+
+    return detector
+    # with open("dynamic_limits.json", 'a') as f:
+    #     if isinstance(data, str):
+    #         detector.map(lambda x: json.dumps(x)).to_mqtt(mqtt_settings['host'], mqtt_settings['port'],
+    #                                                        f"{mqtt_topic.rsplit('/', 1)[0]}/dynamic_limits",
+    #                                                        publish_kwargs={"retain": True})
+    #     elif isinstance(data, pd.DataFrame):
+    #         detector.sink(dump_to_file, f)
+
+
+st.title("Anomaly Detection with Streamlit")
+
+data_type = st.radio("Select data type", ("MQTT Topic", "JSON/CSV file"))
+
+
+def update_chart(x):
+    chart.add_rowa(x.tail(1))
+
+
+if data_type == "MQTT Topic":
+    st.sidebar.subheader("MQTT Settings")
+    mqtt_host = st.sidebar.text_input("Host", "mqtt.example.com")
+    mqtt_port = st.sidebar.number_input("Port", 1883)
+    mqtt_topic = st.text_input("Enter MQTT topic")
+    mqtt_settings = {
+        'host': mqtt_host,
+        'port': mqtt_port,
+        'topic': mqtt_topic,
+    }
+    process_limits_streaming(mqtt_settings)
+
+elif data_type == "JSON/CSV file":
+    uploaded_file = st.file_uploader("Choose a file")
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith('.json'):
+            st.header('JSON file Processing')
+            df = pd.read_json(uploaded_file)
+            processing = process_limits_streaming(df)
+            pipeline = processing.sink(update_chart)
+            pipeline.start()
+
+        elif uploaded_file.name.endswith('.csv'):
+            st.header('CSV file Processing')
+            df = pd.read_csv(uploaded_file)
+
+        else:
+            st.write('Upload a file with a correct format first!')
+
+chart = st.line_chart()

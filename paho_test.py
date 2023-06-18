@@ -2,6 +2,9 @@ import paho.mqtt.subscribe as subscribe
 import streamlit as st
 from streamz import Stream
 
+st.title("Anomaly Detection with Streamlit")
+data_type = st.radio("Select data type", ("MQTT Topic", "JSON/CSV file"))
+
 broker = "mqtt.cloud.uiam.sk"
 port = 1883
 topics = ["shellies/Shelly3EM-Main-Switchboard-C/emeter/0/power"]

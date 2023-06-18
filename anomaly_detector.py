@@ -9,13 +9,13 @@ from paho.mqtt.client import MQTTMessage
 from river import anomaly
 from streamz import Stream
 import streamlit as st
+import json
 
 GRACE_PERIOD = 60 * 24
 
-
-st.title("Anomaly Detection with Streamlit")
-data_type = st.radio("Select data type", ("MQTT Topic", "JSON/CSV file"))
-chart = st.line_chart()
+# st.title("Anomaly Detection with Streamlit")
+# data_type = st.radio("Select data type", ("MQTT Topic", "JSON/CSV file"))
+# chart = st.line_chart()
 
 
 class MyOneClassSVM:
@@ -46,27 +46,92 @@ class MyOneClassSVM:
         return is_anomaly
 
 
-def update_chart(x, chart):
-    print(f"We wanna update chart with {x}")
-    chart.add_rows({k: [v] for k, v in x.items()})
+def preprocess(x):
+    # print(x)
+    # if isinstance(x, pd.DataFrame):
+    if isinstance(x[1], pd.Series):
+        return x
+    else:
+        raise RuntimeError("Wrong data format in preprocess.")
+    # elif isinstance(x, tuple) and isinstance(x[1], pd.Series):
+    #     print("this case 2")
+    #     return {"data": x[1]['_value']}
+    # elif isinstance(x, dict):
+    #     print("this case")
+    #     return list(x.values())[0]
+    # elif isinstance(x, MQTTMessage):
+    #     print("this case 3")
+    #     return {"data": float(x.payload)}
 
 
-#DATA UPLOADER
-if data_type == "MQTT Topic":
-    pass
-elif data_type == "JSON/CSV file":
-    uploaded_file = st.file_uploader("Choose a file")
-
-    if uploaded_file is not None:
-        if uploaded_file.name.endswith('.json'):
-            st.header('JSON file Processing')
+def fit_transform(x, model):
+    is_anomaly = model.process(x)
+    return {
+        "data": x.pop("data"),
+        "anomaly": is_anomaly,
+    }
 
 
-        elif uploaded_file.name.endswith('.csv'):
-            st.header('CSV file Processing')
+df = pd.read_json('input_data/consumption.json')
 
-        else:
-            st.write('Upload a file with a correct format first!')
+# df.time = pd.to_datetime(df.time)
+# df = df.set_index('time')
+# print(df['_value'][4527])
+
+# f = open("input_data/consumption.json")
+# data = json.load(f)
+# df = pd.DataFrame(data)
 
 
+def dump_to_file(x):
+    with open("data/anomaly_detection_result.json", 'a') as f:
+        print(json.dumps(x), file=f)
 
+
+def process_limits_streaming(data: pd.DataFrame):
+    anomaly_detector = MyOneClassSVM()
+
+    if isinstance(data, pd.DataFrame):
+        source = Stream.from_iterable(data.iterrows())
+    else:
+        raise RuntimeError("Wrong data format.")
+
+    detector = source.map(preprocess) #.map(fit_transform, anomaly_detector)
+    detector.sink(print)
+    source.emit(data)
+    # detector.sink(dump_to_file)
+
+    return detector
+
+
+process_limits_streaming(df)
+
+
+# df = pd.read_json(uploaded_file)
+# processing = process_limits_streaming(df)
+# pipeline = processing.sink(update_chart)
+# pipeline.start()
+
+
+# def update_chart(x, chart):
+#     print(f"We wanna update chart with {x}")
+#     chart.add_rows({k: [v] for k, v in x.items()})
+
+#
+# #DATA UPLOADER
+# if data_type == "MQTT Topic":
+#     pass
+# elif data_type == "JSON/CSV file":
+#     uploaded_file = st.file_uploader("Choose a file")
+#
+#     if uploaded_file is not None:
+#         if uploaded_file.name.endswith('.json'):
+#             st.header('JSON file Processing')
+#
+#
+#         elif uploaded_file.name.endswith('.csv'):
+#             st.header('CSV file Processing')
+#
+#         else:
+#             st.write('Upload a file with a correct format first!')
+#
