@@ -2,13 +2,9 @@ import paho.mqtt.subscribe as subscribe
 import streamlit as st
 from streamz import Stream
 
-st.title("Anomaly Detection with Streamlit")
-data_type = st.radio("Select data type", ("MQTT Topic", "JSON/CSV file"))
-
 broker = "mqtt.cloud.uiam.sk"
 port = 1883
-topics = ["shellies/Shelly3EM-Main-Switchboard-C/emeter/0/power"]
-client_id = "marek"
+topics = ["shellies/Shelly_Kitchen-C_CoffeMachine/relay/0/power"]
 
 chart = st.line_chart()
 
@@ -18,7 +14,7 @@ def update_chart(x, chart):
     chart.add_rows({k: [v] for k, v in x.items()})
 
 
-def print_msg(client, userdata, message, s):
+def handle_message(client, userdata, message, s):
     data = message.payload.decode('utf-8')
     print("%s : %s" % (message.topic, data))
     s.emit({message.topic: data})
@@ -29,5 +25,5 @@ s = s.map(lambda x: {'data': x})
 s.sink(update_chart, chart)
 
 subscribe.callback(
-    lambda x, y, z: print_msg(x, y, z, s), topics,
-    hostname=broker, client_id=client_id, clean_session=True)
+    lambda x, y, z: handle_message(x, y, z, s), topics,
+    hostname=broker, clean_session=True)
